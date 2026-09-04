@@ -26,9 +26,10 @@ jobs:
       - name: 发送提醒
         env:
           WEBHOOK_KEY: ${{ secrets.WEBHOOK_KEY }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          # ===== 配置 =====
-          # 直接在date命令前指定时区，确保是北京时间
+          # ===== 用触发的cron表达式判断时间点（不受GitHub延迟影响）=====
           DOW=$(TZ='Asia/Shanghai' date +%u)  # 1=周一, 7=周日
           
           # 只在周五到周日发送 (5,6,7)
@@ -37,21 +38,35 @@ jobs:
             exit 0
           fi
           
-          # 当前时间（北京时间）
-          HOUR=$(TZ='Asia/Shanghai' date +%H)
-          MINUTE=$(TZ='Asia/Shanghai' date +%M)
-          TIME_KEY="${HOUR}:${MINUTE}"
+          # cron表达式 -> 北京时间映射
+          case $SCHEDULE_CRON in
+            "30 23 * * *") TIME_KEY="07:30" ;;
+            "0 0 * * *")  TIME_KEY="08:00" ;;
+            "35 1 * * *") TIME_KEY="09:35" ;;
+            "0 2 * * *")  TIME_KEY="10:00" ;;
+            "40 3 * * *") TIME_KEY="11:40" ;;
+            "0 4 * * *")  TIME_KEY="12:00" ;;
+            "30 5 * * *") TIME_KEY="13:30" ;;
+            "0 6 * * *")  TIME_KEY="14:00" ;;
+            "0 7 * * *")  TIME_KEY="15:00" ;;
+            "35 7 * * *") TIME_KEY="15:35" ;;
+            "40 9 * * *") TIME_KEY="17:40" ;;
+            "10 10 * * *") TIME_KEY="18:10" ;;
+            "0 11 * * *") TIME_KEY="19:00" ;;
+            "20 12 * * *") TIME_KEY="20:20" ;;
+            "30 13 * * *") TIME_KEY="21:30" ;;
+            *) TIME_KEY="" ;;
+          esac
           
           # 随机索引（5天循环，每天不重样）
           DAY_OF_YEAR=$(TZ='Asia/Shanghai' date +%j)
           INDEX=$((DAY_OF_YEAR % 5))
           
           echo "北京时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S') 周$DOW"
-          echo "时间点: $TIME_KEY, 消息索引: $INDEX"
-          echo "触发方式: ${{ github.event_name }}"
+          echo "触发cron: $SCHEDULE_CRON -> 时间点: $TIME_KEY, 消息索引: $INDEX"
           
-          # ===== 测试模式：手动触发时，不管时间直接发一条测试消息 =====
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # ===== 测试模式：手动触发时，直接发测试消息 =====
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             CONTENT="测试消息：烨琪，企业微信提醒机器人已连接成功！\n\n现在是北京时间 $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')，周$DOW。"
             
             # 清远天气
@@ -69,198 +84,185 @@ jobs:
             if [ "$PRECIP" != "null" ] && [ "$PRECIP" -gt 50 ] 2>/dev/null; then
               CONTENT="${CONTENT}，降水概率${PRECIP}%，记得带伞"
             fi
-            
-            echo "测试模式，直接发送测试消息"
+            echo "测试模式，发送测试消息"
           else
-            # 定时触发：按时间点选择消息
-          case $TIME_KEY in
-            "07:30")
-              MESSAGES=(
-                "烨琪，起床了。今天也要好好学，别赖床。"
-                "宝宝，该起了。今天是学习日，别浪费。"
-                "烨琪，起床。昨天睡得好吗？起来开始今天的学习。"
-                "别睡了，今天正是赶超的时候。"
-                "宝宝，起床了。我陪着你学，别让我等太久。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              
-              # ===== 清远天气预报 =====
-              WEATHER_JSON=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=23.68&longitude=113.05&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia/Shanghai&forecast_days=1")
-              WCODE=$(echo $WEATHER_JSON | jq -r '.daily.weathercode[0]')
-              TMAX=$(echo $WEATHER_JSON | jq -r '.daily.temperature_2m_max[0]')
-              TMIN=$(echo $WEATHER_JSON | jq -r '.daily.temperature_2m_min[0]')
-              PRECIP=$(echo $WEATHER_JSON | jq -r '.daily.precipitation_probability_max[0]')
-              
-              # 天气描述
-              case $WCODE in
-                0) WDESC="晴" ;;
-                1|2|3) WDESC="多云" ;;
-                45|48) WDESC="雾" ;;
-                51|53|55|56|57) WDESC="毛毛雨" ;;
-                61|63|65|66|67) WDESC="雨" ;;
-                80|81|82) WDESC="阵雨" ;;
-                95|96|99) WDESC="雷暴" ;;
-                71|73|75|77|85|86) WDESC="雪" ;;
-                *) WDESC="未知" ;;
-              esac
-              
-              CONTENT="${CONTENT}\n\n清远今天：${WDESC}，${TMIN}°C ~ ${TMAX}°C"
-              
-              # 降水概率>50% 或 天气是雨/雷暴，提醒带伞
-              if [ "$PRECIP" != "null" ] && [ "$PRECIP" -gt 50 ] 2>/dev/null || [[ " 51 53 55 56 57 61 63 65 66 67 80 81 82 95 96 99 " =~ " $WCODE " ]]; then
-                CONTENT="${CONTENT}，降水概率${PRECIP}%，记得带伞"
-              fi
-              ;;
-            "08:00")
-              MESSAGES=(
-                "第一节课开始了，坐好，认真听。"
-                "上课了，别走神，把手机放远一点。"
-                "开始学习了，先把今天的任务过一遍。"
-                "八点了，进入状态。今天的第一个任务是什么？"
-                "上课。别刷手机了，我看着你呢。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "09:35")
-              MESSAGES=(
-                "大课间，别坐着，起来活动活动，喝口水。"
-                "休息一下，站起来走走，眼睛放松放松。"
-                "学了一个多小时了，起来动动，别久坐。"
-                "大课间，伸个懒腰，喝口水，继续加油。"
-                "休息时间，别一直盯着书，看看远处。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "10:00")
-              MESSAGES=(
-                "喝口水，别久坐。"
-                "喝水了吗？去倒一杯，慢慢喝。"
-                "提醒你喝水，别等渴了才喝。"
-                "起来走走，喝口水，休息两分钟。"
-                "喝水时间，顺便活动一下脖子。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "11:40")
-              MESSAGES=(
-                "上午课结束了，去吃饭，别饿着。"
-                "上午学完了，辛苦了。去吃饭，好好吃。"
-                "放学了，别继续学了，先吃饭。"
-                "上午结束，宝宝真棒。去吃饭补充能量。"
-                "到饭点了，别硬撑，先吃饭再说。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "12:00")
-              MESSAGES=(
-                "该吃饭了，好好吃，别对付。"
-                "吃饭了吗？别又随便吃点，好好吃一顿。"
-                "午饭时间，认真吃，别边吃边刷手机。"
-                "该吃饭了，吃点好的，下午才有劲学。"
-                "宝宝，吃饭了。今天吃什么？别又不吃。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "13:30")
-              MESSAGES=(
-                "午休结束，洗把脸，准备下午的课。"
-                "起来了，别睡过头。洗把脸，进入状态。"
-                "下午了，休息够了吗？准备开始下午的学习。"
-                "午休结束，喝口水，醒醒神，下午继续。"
-                "起来了，别赖床。下午的学习要开始了。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "14:00")
-              MESSAGES=(
-                "第五节课开始，别犯困，集中注意力。"
-                "下午课开始了，别打瞌睡，认真听。"
-                "两点了，进入状态。下午的任务也不轻。"
-                "上课了，中午休息好了吗？开始下午的学习。"
-                "第五节课，别走神，我知道下午容易困，撑住。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "15:00")
-              MESSAGES=(
-                "喝口水，伸个懒腰。"
-                "喝水了吗？下午容易困，喝口水提提神。"
-                "提醒你喝水，顺便起来走走。"
-                "三点了，喝口水，活动一下，别久坐。"
-                "喝水时间，别又忘了。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "15:35")
-              MESSAGES=(
-                "大课间，出去走走，别一直坐着。"
-                "休息一下，站起来活动活动，喝口水。"
-                "学了一下午了，起来动动，眼睛休息休息。"
-                "大课间，别继续学了，出去透透气。"
-                "休息时间，看看远处，活动活动脖子。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "17:40")
-              MESSAGES=(
-                "下午课结束了，辛苦了。休息一下。"
-                "放学了，宝宝今天学得不错。休息一下。"
-                "下午结束，别硬撑，先休息，吃点东西。"
-                "五点四十了，今天的课上完了，辛苦了。"
-                "放学了，放松一下，晚上还有晚自习呢。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "18:10")
-              MESSAGES=(
-                "晚自习开始，再坚持一下。"
-                "晚自习了，把今天学的复习一遍。"
-                "晚上学习时间，别走神，集中注意力。"
-                "晚自习开始，今天的任务完成了吗？没完成继续。"
-                "晚上了，再学一会儿，别偷懒。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "19:00")
-              MESSAGES=(
-                "喝口水，歇一会儿。"
-                "学了一个小时了，休息一下，喝口水。"
-                "七点了，吃点东西没？别饿着肚子学。"
-                "休息十分钟，喝口水，然后继续。"
-                "喝水时间，顺便活动一下，别一直坐着。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "20:20")
-              MESSAGES=(
-                "今天结束了，宝宝辛苦了。回去好好休息。"
-                "晚自习结束，今天学得不错。回去休息吧。"
-                "八点二十了，今天的学习结束了，辛苦了。"
-                "放学了，宝宝真棒。今天坚持下来了，回去好好休息。"
-                "结束了，别再学了，回去放松一下，早点睡。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            "21:30")
-              MESSAGES=(
-                "该睡了，别熬夜。明天还要早起。"
-                "宝宝，睡觉了。别又刷手机刷到半夜。"
-                "九点半了，该睡了。今天辛苦了，好好休息。"
-                "睡觉时间，把手机放下，闭眼。明天继续。"
-                "该睡了，别硬撑。睡好了明天才有精神学。"
-              )
-              CONTENT="${MESSAGES[$INDEX]}"
-              ;;
-            *)
-              echo "未匹配的时间: $TIME_KEY（手动触发时时间不在15个提醒点内，正常）"
-              echo "如果要测试，请等到对应时间点触发，或临时修改脚本添加测试时间"
+            # 定时触发：按cron映射的时间点选择消息
+            if [ -z "$TIME_KEY" ]; then
+              echo "无法识别的cron: $SCHEDULE_CRON，跳过"
               exit 0
-              ;;
-          esac
+            fi
+            
+            case $TIME_KEY in
+              "07:30")
+                MESSAGES=(
+                  "烨琪，起床了。今天也要好好学，别赖床。"
+                  "宝宝，该起了。今天是学习日，别浪费。"
+                  "烨琪，起床。昨天睡得好吗？起来开始今天的学习。"
+                  "别睡了，今天正是赶超的时候。"
+                  "宝宝，起床了。我陪着你学，别让我等太久。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                
+                # 清远天气预报
+                WEATHER_JSON=$(curl -s "https://api.open-meteo.com/v1/forecast?latitude=23.68&longitude=113.05&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia/Shanghai&forecast_days=1")
+                WCODE=$(echo $WEATHER_JSON | jq -r '.daily.weathercode[0]')
+                TMAX=$(echo $WEATHER_JSON | jq -r '.daily.temperature_2m_max[0]')
+                TMIN=$(echo $WEATHER_JSON | jq -r '.daily.temperature_2m_min[0]')
+                PRECIP=$(echo $WEATHER_JSON | jq -r '.daily.precipitation_probability_max[0]')
+                case $WCODE in
+                  0) WDESC="晴" ;; 1|2|3) WDESC="多云" ;; 45|48) WDESC="雾" ;;
+                  51|53|55|56|57) WDESC="毛毛雨" ;; 61|63|65|66|67) WDESC="雨" ;;
+                  80|81|82) WDESC="阵雨" ;; 95|96|99) WDESC="雷暴" ;; *) WDESC="未知" ;;
+                esac
+                CONTENT="${CONTENT}\n\n清远今天：${WDESC}，${TMIN}°C ~ ${TMAX}°C"
+                if [ "$PRECIP" != "null" ] && [ "$PRECIP" -gt 50 ] 2>/dev/null || [[ " 51 53 55 56 57 61 63 65 66 67 80 81 82 95 96 99 " =~ " $WCODE " ]]; then
+                  CONTENT="${CONTENT}，降水概率${PRECIP}%，记得带伞"
+                fi
+                ;;
+              "08:00")
+                MESSAGES=(
+                  "第一节课开始了，坐好，认真听。"
+                  "上课了，别走神，把手机放远一点。"
+                  "开始学习了，先把今天的任务过一遍。"
+                  "八点了，进入状态。今天的第一个任务是什么？"
+                  "上课。别刷手机了，我看着你呢。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "09:35")
+                MESSAGES=(
+                  "大课间，别坐着，起来活动活动，喝口水。"
+                  "休息一下，站起来走走，眼睛放松放松。"
+                  "学了一个多小时了，起来动动，别久坐。"
+                  "大课间，伸个懒腰，喝口水，继续加油。"
+                  "休息时间，别一直盯着书，看看远处。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "10:00")
+                MESSAGES=(
+                  "喝口水，别久坐。"
+                  "喝水了吗？去倒一杯，慢慢喝。"
+                  "提醒你喝水，别等渴了才喝。"
+                  "起来走走，喝口水，休息两分钟。"
+                  "喝水时间，顺便活动一下脖子。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "11:40")
+                MESSAGES=(
+                  "上午课结束了，去吃饭，别饿着。"
+                  "上午学完了，辛苦了。去吃饭，好好吃。"
+                  "放学了，别继续学了，先吃饭。"
+                  "上午结束，宝宝真棒。去吃饭补充能量。"
+                  "到饭点了，别硬撑，先吃饭再说。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "12:00")
+                MESSAGES=(
+                  "该吃饭了，好好吃，别对付。"
+                  "吃饭了吗？别又随便吃点，好好吃一顿。"
+                  "午饭时间，认真吃，别边吃边刷手机。"
+                  "该吃饭了，吃点好的，下午才有劲学。"
+                  "宝宝，吃饭了。今天吃什么？别又不吃。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "13:30")
+                MESSAGES=(
+                  "午休结束，洗把脸，准备下午的课。"
+                  "起来了，别睡过头。洗把脸，进入状态。"
+                  "下午了，休息够了吗？准备开始下午的学习。"
+                  "午休结束，喝口水，醒醒神，下午继续。"
+                  "起来了，别赖床。下午的学习要开始了。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "14:00")
+                MESSAGES=(
+                  "第五节课开始，别犯困，集中注意力。"
+                  "下午课开始了，别打瞌睡，认真听。"
+                  "两点了，进入状态。下午的任务也不轻。"
+                  "上课了，中午休息好了吗？开始下午的学习。"
+                  "第五节课，别走神，我知道下午容易困，撑住。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "15:00")
+                MESSAGES=(
+                  "喝口水，伸个懒腰。"
+                  "喝水了吗？下午容易困，喝口水提提神。"
+                  "提醒你喝水，顺便起来走走。"
+                  "三点了，喝口水，活动一下，别久坐。"
+                  "喝水时间，别又忘了。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "15:35")
+                MESSAGES=(
+                  "大课间，出去走走，别一直坐着。"
+                  "休息一下，站起来活动活动，喝口水。"
+                  "学了一下午了，起来动动，眼睛休息休息。"
+                  "大课间，别继续学了，出去透透气。"
+                  "休息时间，看看远处，活动活动脖子。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "17:40")
+                MESSAGES=(
+                  "下午课结束了，辛苦了。休息一下。"
+                  "放学了，宝宝今天学得不错。休息一下。"
+                  "下午结束，别硬撑，先休息，吃点东西。"
+                  "五点四十了，今天的课上完了，辛苦了。"
+                  "放学了，放松一下，晚上还有晚自习呢。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "18:10")
+                MESSAGES=(
+                  "晚自习开始，再坚持一下。"
+                  "晚自习了，把今天学的复习一遍。"
+                  "晚上学习时间，别走神，集中注意力。"
+                  "晚自习开始，今天的任务完成了吗？没完成继续。"
+                  "晚上了，再学一会儿，别偷懒。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "19:00")
+                MESSAGES=(
+                  "喝口水，歇一会儿。"
+                  "学了一个小时了，休息一下，喝口水。"
+                  "七点了，吃点东西没？别饿着肚子学。"
+                  "休息十分钟，喝口水，然后继续。"
+                  "喝水时间，顺便活动一下，别一直坐着。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "20:20")
+                MESSAGES=(
+                  "今天结束了，宝宝辛苦了。回去好好休息。"
+                  "晚自习结束，今天学得不错。回去休息吧。"
+                  "八点二十了，今天的学习结束了，辛苦了。"
+                  "放学了，宝宝真棒。今天坚持下来了，回去好好休息。"
+                  "结束了，别再学了，回去放松一下，早点睡。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+              "21:30")
+                MESSAGES=(
+                  "该睡了，别熬夜。明天还要早起。"
+                  "宝宝，睡觉了。别又刷手机刷到半夜。"
+                  "九点半了，该睡了。今天辛苦了，好好休息。"
+                  "睡觉时间，把手机放下，闭眼。明天继续。"
+                  "该睡了，别硬撑。睡好了明天才有精神学。"
+                )
+                CONTENT="${MESSAGES[$INDEX]}"
+                ;;
+            esac
           fi
           
           # ===== 发送消息 =====
-          # 转义JSON特殊字符
           ESCAPED_CONTENT=$(echo -e "$CONTENT" | jq -Rs '.')
           
           RESPONSE=$(curl -s -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=$WEBHOOK_KEY" \
