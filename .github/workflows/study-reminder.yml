@@ -29,14 +29,9 @@ jobs:
           SCHEDULE_CRON: ${{ github.event.schedule }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          # ===== 用触发的cron表达式判断时间点（不受GitHub延迟影响）=====
+          # ===== 每天都发送 =====
           DOW=$(TZ='Asia/Shanghai' date +%u)  # 1=周一, 7=周日
-          
-          # 只在周五到周日发送 (5,6,7)
-          if [ $DOW -lt 5 ]; then
-            echo "今天是周$DOW，不在发送范围内（周五到周日），跳过"
-            exit 0
-          fi
+          echo "今天是周$DOW，发送提醒"
           
           # cron表达式 -> 北京时间映射
           case $SCHEDULE_CRON in
