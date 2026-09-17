@@ -1,0 +1,96 @@
+name: 单词阅读生成
+on:
+  schedule:
+    - cron: '0 13 * * *'  # 北京时间21:00
+  workflow_dispatch:
+
+jobs:
+  generate-reading:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 获取今日单词并生成阅读
+        env:
+          MAIMEMO_TOKEN: ${{ secrets.MAIMEMO_TOKEN }}
+          ZHIPU_API_KEY: ${{ secrets.ZHIPU_API_KEY }}
+          WEBHOOK_KEY: ${{ secrets.WEBHOOK_KEY }}
+        run: |
+          set -e
+          
+          echo "=== 1. 获取今日学习单词 ==="
+          
+          # 获取学习进度
+          PROGRESS=$(curl -s -X POST "https://open.maimemo.com/open/api/v1/memo/study/get_study_progress" \
+            -H "Authorization: Bearer $MAIMEMO_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}')
+          FINISHED=$(echo $PROGRESS | jq -r '.data.progress.finished')
+          TOTAL=$(echo $PROGRESS | jq -r '.data.progress.total')
+          echo "今日进度: $FINISHED/$TOTAL"
+          
+          if [ "$TOTAL" = "0" ] || [ "$FINISHED" = "0" ]; then
+            echo "今天没有学习记录，跳过"
+            CONTENT="📚 今日墨墨学习提醒\n\n今天还没有背单词哦～\n背完单词后明天会自动生成阅读材料。"
+            ESCAPED=$(echo -e "$CONTENT" | jq -Rs '.')
+            curl -s -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=$WEBHOOK_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"msgtype\":\"text\",\"text\":{\"content\":$ESCAPED}}"
+            exit 0
+          fi
+          
+          # 获取今日单词列表
+          WORDS_RESP=$(curl -s -X POST "https://open.maimemo.com/open/api/v1/memo/study/get_today_items" \
+            -H "Authorization: Bearer $MAIMEMO_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"limit": 200}')
+          
+          WORDS=$(echo $WORDS_RESP | jq -r '.data.today_items[].voc_spelling' | tr '\n' ', ' | sed 's/,$//')
+          WORD_COUNT=$(echo $WORDS_RESP | jq '.data.today_items | length')
+          echo "获取到 $WORD_COUNT 个单词: $WORDS"
+          
+          # 手动测试模式
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "手动测试模式"
+          fi
+          
+          echo ""
+          echo "=== 2. 调用智谱AI生成阅读材料 ==="
+          
+          # 构造prompt
+          PROMPT="根据以下今天背的英语单词，写一篇200-300词的英语阅读理解短文，要求：
+1. 自然地包含所有列出的单词，用*号加粗标出这些单词
+2. 文章主题适合大学生（生活、学习、成长类）
+3. 附3道选择题（附答案）
+4. 最后列出所有单词的中文释义
+5. 直接输出内容，不要多余的解释
+
+单词列表：$WORDS"
+          
+          # 调用智谱AI
+          AI_RESP=$(curl -s -X POST "https://open.bigmodel.cn/api/paas/v4/chat/completions" \
+            -H "Authorization: Bearer $ZHIPU_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"model\": \"glm-4-flash\",
+              \"messages\": [{\"role\": \"user\", \"content\": $(echo $PROMPT | jq -Rs '.')}],
+              \"max_tokens\": 2000
+            }")
+          
+          AI_CONTENT=$(echo $AI_RESP | jq -r '.choices[0].message.content')
+          echo "AI生成完成，长度: ${#AI_CONTENT} 字符"
+          
+          # 企业微信文本消息有长度限制，太长就截断
+          if [ ${#AI_CONTENT} -gt 2000 ]; then
+            AI_CONTENT=$(echo "$AI_CONTENT" | head -c 1900)
+            AI_CONTENT="${AI_CONTENT}...\n\n(内容较长，请在墨墨中查看完整单词)"
+          fi
+          
+          CONTENT="📖 今日单词阅读材料\n\n今日背了 $WORD_COUNT 个单词，生成阅读理解如下：\n\n$AI_CONTENT"
+          
+          echo ""
+          echo "=== 3. 发送到企业微信 ==="
+          ESCAPED=$(echo -e "$CONTENT" | jq -Rs '.')
+          RESP=$(curl -s -X POST "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=$WEBHOOK_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"msgtype\":\"text\",\"text\":{\"content\":$ESCAPED}}")
+          
+          echo "发送结果: $RESP"
