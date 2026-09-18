@@ -41,15 +41,14 @@ jobs:
           WORDS=$(echo "$WORDS_RESP" | jq -r '.data.today_items[].voc_spelling' | tr '\n' ',' | sed 's/,$//')
           WORD_COUNT=$(echo "$WORDS_RESP" | jq '.data.today_items | length')
           echo "单词数: $WORD_COUNT"
-          echo "单词: $WORDS"
 
           echo "=== 调用智谱AI生成 ==="
-          PROMPT_TEXT="根据以下今天背的英语单词，写一篇200-300词的英语阅读理解短文，要求：1.自然包含所有单词并用*加粗标出 2.附3道选择题和答案 3.最后列出单词中文释义 4.直接输出内容。单词：$WORDS"
+          PROMPT_TEXT="根据以下英语单词，写一篇120词左右的英文小短文，自然包含所有单词并用*加粗标出。文末附2道选择题和答案。最后列出单词中文释义。直接输出，不要多余解释。单词：$WORDS"
 
           REQUEST_BODY=$(jq -n --arg p "$PROMPT_TEXT" '{
             model: "glm-4-flash",
             messages: [{role: "user", content: $p}],
-            max_tokens: 2000
+            max_tokens: 1200
           }')
 
           AI_RESP=$(curl -s -X POST "https://open.bigmodel.cn/api/paas/v4/chat/completions" \
@@ -60,12 +59,7 @@ jobs:
           AI_CONTENT=$(echo "$AI_RESP" | jq -r '.choices[0].message.content')
           echo "AI生成完成"
 
-          if [ ${#AI_CONTENT} -gt 1800 ]; then
-            AI_CONTENT=$(echo "$AI_CONTENT" | head -c 1700)
-            AI_CONTENT="${AI_CONTENT}...\n\n(内容较长)"
-          fi
-
-          CONTENT="📖 今日单词阅读材料\n\n今日背了 $WORD_COUNT 个单词：\n\n$AI_CONTENT"
+          CONTENT="📖 今日单词阅读（$WORD_COUNT个）\n\n$AI_CONTENT"
 
           echo "=== 发送企业微信 ==="
           ESCAPED=$(printf '%b' "$CONTENT" | jq -Rs '.')
